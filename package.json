@@ -1,0 +1,19 @@
+{
+  "name": "demo-snabbdom-counter",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "watch": "watchify app/js/main.1.js --debug --outfile app/build.js"
+  },
+  "author": "thurt",
+  "license": "ISC",
+  "devDependencies": {
+    "browserify": "^13.0.0",
+    "watch": "^0.17.1",
+    "watchify": "^3.7.0"
+  },
+  "dependencies": {
+    "snabbdom": "^0.4.1"
+  }
+}

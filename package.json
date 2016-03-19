@@ -10,7 +10,6 @@
   "license": "ISC",
   "devDependencies": {
     "browserify": "^13.0.0",
-    "watch": "^0.17.1",
     "watchify": "^3.7.0"
   },
   "dependencies": {

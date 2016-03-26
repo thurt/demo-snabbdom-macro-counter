@@ -1,157 +1,365 @@
 'use strict'
 const snabbdom = require('snabbdom')
 const patch = snabbdom.init([ // Init patch function with choosen modules
-  require('snabbdom/modules/class'), // makes it easy to toggle classes
-  require('snabbdom/modules/props'), // for setting properties on DOM elements
-  require('snabbdom/modules/style'), // handles styling on elements with support for animations
-  require('snabbdom/modules/eventlisteners'), // attaches event listeners
+  require('snabbdom/modules/eventlisteners') // attaches event listeners
 ])
 const h = require('snabbdom/h')
 const view = Symbol('view')
+/*
+__LOWER COMPONENT-LEVEL_________________________________________________________
 
-//HELPERS/////////////////////////////////////////////////
-function create(constructor, data, parent) {
-  var new_c = new constructor()
-  Object.assign(new_c, data)
+this level is for:
+ - defining methods which manipulate component's own data
+ - defining component presentation via #getView (however, methods should NOT call #getView themselves)
+ - these components do not communicate with other components or the application
 
-  list.components.push(new_c)
+ */
+class Toolbar {
+  constructor({ isRecording = false }) {
+    this.isRecording = isRecording
+  }
 
-  update(new_c)
-}
+  new() { }
+  record() {
+    this.isRecording ? this.isRecording = false : this.isRecording = true
+  }
+  clear() { }
 
-function update(component) {
-  component[view] = component.getView()
-  list.updateView()
-}
-function isRecording(component, ev) {
-  var toolbar = list.components.filter(c => c instanceof Toolbar)[0]
-  if (toolbar.isRecording) {
-    // we need to know the location of the component in list
-    // we need to know what child element the event is coming from in the component
-    if (!toolbar.macroDef) toolbar.macroDef = []
-
-    var list_idx = list.components.indexOf(component)
-    var childs = list[view].elm.children[list_idx].children
-
-    var component_child_idx = Array.prototype.indexOf.call(childs, ev.target)
-    toolbar.macroDef.push({ list_idx, component_child_idx, ev_type: ev.type })
-
-    return true
-  } else return false
-}
-
-//COMPONENTS//////////////////////////////////////////////
-const ComponentDict = { List, Toolbar, Counter, Macro }
-
-function List() {
-  this.components = []
-}
-List.prototype = {
   getView() {
-    return h('div', this.components.map(c => c[view]))
-  },
-  updateView() {
-    var new_v = this.getView()
-    patch(this[view], new_v)
-    this[view] = new_v
-    localStorage.setItem('list', JSON.stringify(this))
+    return h('div', [
+      h('button', { on: { click: (e) => this.new(e) } }, 'New'),
+      h('button', { on: { click: (e) => this.record(e) } }, this.isRecording ? 'Stop Recording' : 'Start Recording'),
+      h('button', { on: { click: (e) => this.clear(e) } }, 'Clear State')
+    ])
   }
 }
 
-function Toolbar() { this._type = 'Toolbar' }
-Toolbar.prototype = {
+class Counter {
+  constructor({ count = 0 }) {
+    this.count = count
+  }
+
+  plus() { this.count += 1 }
+  minus() { this.count -= 1 }
+
   getView() {
-    var newButton = h('button', {
-      on: { click: (ev) => {
-        if (isRecording(this, ev)) return
+    return h('div', [
+      h('button', { on: { click: (e) => this.plus(e) } }, '+'),
+      h('button', { on: { click: (e) => this.minus(e) } }, '-'),
+      h('div', `Count: ${ this.count }`)
+    ])
+  }
+}
 
-        create(ComponentDict[this.newType], this.newData)
-      } }
-    }, 'New')
+class Macro {
+  constructor({ value = 'Play Macro' }) {
+    Object.defineProperty(this, 'value', { value, enumerable: false })
+  }
 
-    var recordButton = h('button', {
-      on: { click: () => {
-        if (this.isRecording) {
-          this.isRecording = false
-          create(Macro, { macroDef: this.macroDef })
-          this.macroDef = null
-        } else {
-          this.isRecording = true
+  play() { }
+
+  getView() {
+    return h('div', [
+      h('button', { on: { click: (e) => this.play(e) } }, this.value)
+    ])
+  }
+}
+/*
+__UPPER COMPONENT-LEVEL_________________________________________________________
+
+this level is for:
+ - subclasses of components (whose instances often have an id that is unique to the app)
+ - these component methods act as application-specific wrappers around the super method
+ - these component methods are allowed to communicate with component instances using Id
+
+*/
+class AppToolbar extends Toolbar {
+  constructor({ macroDef = [], isRecording }) {
+    super({ isRecording })
+    this.macroDef = macroDef
+    this.type = 'AppToolbar'
+
+    Id.assign(this, 'ls', 'list')
+  }
+
+  new(e) {
+    if (this.isRecording) {
+      App.update(this.recordEvent(this, e), { doPatch: false })
+      return // prevent normal behavior
+    }
+
+    this.ls.add({ type: 'AppCounter' })
+    App.update(this.ls)
+  }
+
+  record() {
+    super.record()
+
+    if (this.isRecording) App.update(this)
+    else if (this.macroDef.length) {
+      this.ls.add({ type: 'AppMacro', def: this.macroDef })
+      this.macroDef = []
+
+      App.update([this, this.ls])
+    } else App.update(this)
+  }
+
+  recordEvent(c, ev) {
+    if (!this.macroDef) this.macroDef = []
+
+    var trie_keys = App.getTrieKeys(c)
+
+    if (c[view].children) {
+      trie_keys.push(Array.prototype.indexOf.call(ev.target.parentNode.children, ev.target))
+    }
+
+    this.macroDef.push({ trie_keys, ev_type: ev.type })
+
+    return this
+  }
+
+  clear() {
+    App.clearState()
+  }
+}
+
+class AppCounter extends Counter {
+  constructor({ count }) {
+    super({ count })
+    this.type = 'AppCounter'
+
+    Id.assign(this, 'tb', 'toolbar')
+  }
+
+  plus(e) {
+    if (this.tb.isRecording) {
+      App.update(this.tb.recordEvent(this, e), false, true)
+      return // prevent normal behavior
+    }
+
+    super.plus()
+    App.update(this)
+  }
+
+  minus(e) {
+    if (this.tb.isRecording) {
+      App.update(this.tb.recordEvent(this, e), false, true)
+      return // prevent normal behavior
+    }
+
+    super.minus()
+    App.update(this)
+  }
+}
+
+class AppMacro extends Macro {
+  constructor({ def = [] }) {
+    super({ value: `Play Macro (${def.length} events)` })
+    this.def = def
+    this.type = 'AppMacro'
+
+    Id.assign(this, 'tb', 'toolbar')
+  }
+
+  play(e) {
+    if (this.tb.isRecording) {
+      App.update(this.tb.recordEvent(this, e), false, true)
+      return // prevent normal behavior
+    }
+
+    this.def.forEach(step => {
+      var el = App.$view
+      for (var i of step.trie_keys) {
+        el = el.children[i]
+      }
+      el.dispatchEvent(new Event(step.ev_type))
+    })
+  }
+}
+/*
+__LOWER APP-LEVEL_______________________________________________________________
+
+this level is for:
+ - sorting, grouping, and look-up/retrieval of components in the application
+ - they have no "own" data rendered on screen
+
+*/
+class List {
+  constructor({ id, tag = 'div', components = [] }) {
+    this.type = 'List' // force
+    this.tag = tag
+    this.components = []
+    components.forEach(c_state => this.add(c_state))
+    this[view] = this.getView()
+  }
+
+  add(c_state) {
+    var new_c = new Type[c_state.type](c_state)
+    new_c[view] = new_c.getView()
+    this.components.push(new_c)
+    if (c_state.id) Id.add(new_c.id = c_state.id, new_c)
+    return new_c
+  }
+
+  update(this_c) {
+    for (var i = 0; i < this.components.length; i++) {
+      var c = this.components[i]
+
+      if (c === this_c) {
+        c[view] = c.getView()
+        return c
+      }
+
+      if (c instanceof List) {
+        if (c.update(this_c)) {
+          c[view] = c.getView()
+          return c
         }
-
-        update(this)
       }
-    } }, this.isRecording ? 'Stop Recording' : 'Start Recording')
-
-    var clearButton = h('button', {
-      on: { click: () => {
-        localStorage.clear()
-        window.alert('Please refresh your browser now')
-      }
-    } }, 'Clear localStorage')
-
-    return h('div', [newButton, recordButton, clearButton])
+    }
   }
-}
 
-function Counter() { this._type = 'Counter' }
-Counter.prototype = {
+  getTrieKeys(this_c, keys = []) {
+    for (var i = 0; i < this.components.length; i++) {
+      var c = this.components[i]
+
+      if (c === this_c) {
+        keys.push(i)
+        return keys
+      }
+
+      if (c instanceof List) {
+        if (c.getTrieKeys(this_c, keys)) {
+          keys.unshift(i)
+          return keys
+        }
+      }
+    }
+  }
+
   getView() {
-    var plusButton = h('button', {
-      on: { click: (ev) => {
-        if (isRecording(this, ev)) return
-
-        this.count += 1
-        update(this)
-      } }
-    }, '+')
-    var minusButton = h('button', {
-      on: { click: (ev) => {
-        if (isRecording(this, ev)) return
-
-        this.count -= 1
-        update(this)
-      } }
-    }, '-')
-    var countDiv = h('div', `Count: ${ this.count }`)
-
-    return h('div', [plusButton, minusButton, countDiv])
+    return h(this.tag, this.components.map(c => c[view]))
   }
+
 }
 
-function Macro() { this._type = 'Macro' }
-Macro.prototype = {
-  getView() {
-    var macroButton = h('button', {
-      on: { click: (ev) => {
-        var el = list[view].elm
-        this.macroDef.forEach(step => {
-          var component = el.children[step.list_idx]
-          var ev_target = component.children[step.component_child_idx]
-          ev_target.dispatchEvent(new Event(step.ev_type))
-        })
+// component constructors
+const Type = { List, AppToolbar, AppMacro, AppCounter }
+// component instances which are created with an id property will go in Id
+const Id = (() => {
+  var promise = {}
+  var resolver = {}
+
+  return {
+    assign(c, prop, name) {
+      var _assign = (val) => Object.defineProperty(c, prop, { value: val, enumerable: false })
+
+      if (promise[name]) {
+        promise[name].then(_assign)
+      } else {
+        promise[name] = new Promise(res => {
+          var r = c => res(c)
+          resolver[name] = r
+        }).then(_assign)
       }
-    } }, 'Play Macro')
+    },
+    add(name, c) {
+      if (promise[name]) {
+        if (!resolver[name]) {
+          throw new Error(`Id name ${name} has already been added`)
+        }
+        else {
+          resolver[name](c)
+          delete resolver[name]
+        }
+      }
+      else {
+        promise[name] = Promise.resolve(c)
+      }
+    }
+  }
+})()
 
-    return h('div', [macroButton])
+/*
+__UPPER APP-LEVEL_______________________________________________________________
+
+this level is for:
+  - patching the DOM or saving the state of the application
+  - defining the persistence mechanism (localStorage, in this case)
+  - defining the initial application instance(s) and their location in the DOM
+
+*/
+class LocalStorageApplication extends List {
+  constructor({ id, tag, components }) {
+    var savedState = JSON.parse(localStorage.getItem(id))
+
+    if (savedState) super(savedState)
+    else super({ tag, components })
+
+    Object.defineProperty(this, 'id', { value: id, enumerable: false })
+  }
+
+  update(component, doPatch = true, doSave = true) {
+    // recompile views
+    if (Array.isArray(component)) {
+      for (var c of component) super.update(c)
+    } else super.update(component)
+
+    if (doPatch) {
+      // patch DOM
+      var new_v = this.getView()
+      patch(this[view], new_v)
+      this[view] = new_v
+    }
+
+    if (doSave) {
+      // save state
+      localStorage.setItem(this.id, JSON.stringify(this))
+    }
+  }
+
+  clearState() {
+    localStorage.removeItem(this.id)
+  }
+
+}
+
+class Demo extends LocalStorageApplication {
+  constructor($view, $state, superState) {
+    super(superState)
+
+    Object.defineProperties(this, {
+      $view: { value: $view, enumerable: false },
+      $state: { value: $state, enumerable: false }
+    })
+
+    patch(this.$view, this[view])
+    this.outputState()
+  }
+
+  update() {
+    super.update.apply(this, arguments)
+    this.outputState()
+  }
+
+  clearState() {
+    super.clearState()
+    window.alert('The state has been cleared from localStorage. However, the current state is still in-memory. To reset the demo, you must refresh your browser now.')
+  }
+  outputState() {
+    this.$state.innerText = JSON.stringify(this, undefined, 1)
   }
 }
 
-//SETUP//////////////////////////////////////////////////////////
-var list = new List()
-patch(document.getElementById('list'), list[view] = list.getView())
+/*
+________________________________________________________________________________
 
-var list_data = JSON.parse(localStorage.getItem('list'))
+*/
 
-if (!list_data) {
-  create(Toolbar, { newType: 'Counter', newData: { count: 0 }, isRecording: false })
-} else {
-  list_data.components.forEach(data => {
-    create(ComponentDict[data._type], data)
-  })
-}
-
-
-
-
-
+const App = new Demo(document.getElementById('CounterDemo'), document.getElementById('_state'), {
+  id: 'CounterDemo',
+  components: [
+    { type: 'AppToolbar', id: 'toolbar' },
+    { type: 'List', id: 'list' }
+  ]
+})

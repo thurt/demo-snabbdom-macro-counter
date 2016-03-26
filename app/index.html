@@ -3,9 +3,27 @@
   <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
     <title>counter demo</title>
+    <style type="text/css">
+      #content {
+        display: flex;
+      }
+
+      #content > div {
+        flex: 1;
+        outline: 1px solid black;
+      }
+    </style>
   </head>
   <body>
-    <div id="list"></div>
+    <h2>Counter Demo</h2>
+    <sub>On the left is the application's view and on the right is the data state of the application. The application state is persisted in localStorage, so you may close/refresh your browser without losing the state.</sub>
+    <div id="content">
+        <div id="CounterDemo">
+        </div>
+      <div>
+        <pre id="_state"></pre>
+      </div>
+    </div>
     <script src="build.js"></script>
   </body>
 </html>

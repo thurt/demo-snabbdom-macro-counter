@@ -105,12 +105,12 @@ class AppToolbar extends Toolbar {
   }
 
   recordEvent(c, ev) {
-    if (!this.macroDef) this.macroDef = []
-
     var trie_keys = App.getTrieKeys(c)
 
-    if (c[view].children) {
-      trie_keys.push(Array.prototype.indexOf.call(ev.target.parentNode.children, ev.target))
+    var $childs = c[view].children.map(child => child.elm)
+
+    if ($childs.length > 0) {
+      trie_keys.push($childs.indexOf(ev.target))
     }
 
     this.macroDef.push({ trie_keys, ev_type: ev.type })
@@ -133,7 +133,7 @@ class AppCounter extends Counter {
 
   plus(e) {
     if (this.tb.isRecording) {
-      App.update(this.tb.recordEvent(this, e), false, true)
+      App.update(this.tb.recordEvent(this, e), { doPatch: false })
       return // prevent normal behavior
     }
 
@@ -143,7 +143,7 @@ class AppCounter extends Counter {
 
   minus(e) {
     if (this.tb.isRecording) {
-      App.update(this.tb.recordEvent(this, e), false, true)
+      App.update(this.tb.recordEvent(this, e), { doPatch: false })
       return // prevent normal behavior
     }
 
@@ -163,16 +163,18 @@ class AppMacro extends Macro {
 
   play(e) {
     if (this.tb.isRecording) {
-      App.update(this.tb.recordEvent(this, e), false, true)
+      App.update(this.tb.recordEvent(this, e), { doPatch: false })
       return // prevent normal behavior
     }
 
+    var top_view = App[view]
+
     this.def.forEach(step => {
-      var el = App.$view
+      var view = top_view
       for (var i of step.trie_keys) {
-        el = el.children[i]
+        view = view.children[i]
       }
-      el.dispatchEvent(new Event(step.ev_type))
+      view.data.on[step.ev_type].fn({ type: step.ev_type })
     })
   }
 }
@@ -240,7 +242,6 @@ class List {
   getView() {
     return h(this.tag, this.components.map(c => c[view]))
   }
-
 }
 
 // component constructors
@@ -321,7 +322,6 @@ class LocalStorageApplication extends List {
   clearState() {
     localStorage.removeItem(this.id)
   }
-
 }
 
 class Demo extends LocalStorageApplication {
@@ -329,11 +329,10 @@ class Demo extends LocalStorageApplication {
     super(superState)
 
     Object.defineProperties(this, {
-      $view: { value: $view, enumerable: false },
       $state: { value: $state, enumerable: false }
     })
 
-    patch(this.$view, this[view])
+    patch($view, this[view])
     this.outputState()
   }
 
@@ -355,11 +354,11 @@ class Demo extends LocalStorageApplication {
 ________________________________________________________________________________
 
 */
-
-const App = new Demo(document.getElementById('CounterDemo'), document.getElementById('_state'), {
+var App = new Demo(document.getElementById('CounterDemo'), document.getElementById('_state'), {
   id: 'CounterDemo',
   components: [
     { type: 'AppToolbar', id: 'toolbar' },
     { type: 'List', id: 'list' }
   ]
 })
+

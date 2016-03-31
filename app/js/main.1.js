@@ -5,6 +5,7 @@ const patch = snabbdom.init([ // Init patch function with choosen modules
 ])
 const h = require('snabbdom/h')
 const view = Symbol('view')
+const parent = Symbol('parent')
 /*
 __LOWER COMPONENT-LEVEL_________________________________________________________
 
@@ -124,29 +125,17 @@ class AppToolbar extends Toolbar {
 }
 
 class AppCounter extends Counter {
-  constructor({ count }) {
-    super({ count })
+  constructor(state) {
+    super(state)
     this.type = 'AppCounter'
-
-    Id.assign(this, 'tb', 'toolbar')
   }
 
-  plus(e) {
-    if (this.tb.isRecording) {
-      App.update(this.tb.recordEvent(this, e), { doPatch: false })
-      return // prevent normal behavior
-    }
-
+  plus() {
     super.plus()
     App.update(this)
   }
 
-  minus(e) {
-    if (this.tb.isRecording) {
-      App.update(this.tb.recordEvent(this, e), { doPatch: false })
-      return // prevent normal behavior
-    }
-
+  minus() {
     super.minus()
     App.update(this)
   }
@@ -157,16 +146,9 @@ class AppMacro extends Macro {
     super({ value: `Play Macro (${def.length} events)` })
     this.def = def
     this.type = 'AppMacro'
-
-    Id.assign(this, 'tb', 'toolbar')
   }
 
-  play(e) {
-    if (this.tb.isRecording) {
-      App.update(this.tb.recordEvent(this, e), { doPatch: false })
-      return // prevent normal behavior
-    }
-
+  play() {
     var top_view = App[view]
 
     this.def.forEach(step => {
@@ -178,6 +160,7 @@ class AppMacro extends Macro {
     })
   }
 }
+
 /*
 __LOWER APP-LEVEL_______________________________________________________________
 
@@ -186,67 +169,7 @@ this level is for:
  - they have no "own" data rendered on screen
 
 */
-class List {
-  constructor({ id, tag = 'div', components = [] }) {
-    this.type = 'List' // force
-    this.tag = tag
-    this.components = []
-    components.forEach(c_state => this.add(c_state))
-    this[view] = this.getView()
-  }
-
-  add(c_state) {
-    var new_c = new Type[c_state.type](c_state)
-    new_c[view] = new_c.getView()
-    this.components.push(new_c)
-    if (c_state.id) Id.add(new_c.id = c_state.id, new_c)
-    return new_c
-  }
-
-  update(this_c) {
-    for (var i = 0; i < this.components.length; i++) {
-      var c = this.components[i]
-
-      if (c === this_c) {
-        c[view] = c.getView()
-        return c
-      }
-
-      if (c instanceof List) {
-        if (c.update(this_c)) {
-          c[view] = c.getView()
-          return c
-        }
-      }
-    }
-  }
-
-  getTrieKeys(this_c, keys = []) {
-    for (var i = 0; i < this.components.length; i++) {
-      var c = this.components[i]
-
-      if (c === this_c) {
-        keys.push(i)
-        return keys
-      }
-
-      if (c instanceof List) {
-        if (c.getTrieKeys(this_c, keys)) {
-          keys.unshift(i)
-          return keys
-        }
-      }
-    }
-  }
-
-  getView() {
-    return h(this.tag, this.components.map(c => c[view]))
-  }
-}
-
 // component constructors
-const Type = { List, AppToolbar, AppMacro, AppCounter }
-// component instances which are created with an id property will go in Id
 const Id = (() => {
   var promise = {}
   var resolver = {}
@@ -281,6 +204,96 @@ const Id = (() => {
   }
 })()
 
+const ProxyName = {
+  toolbar_isRecording: (function() {
+    var id = {}
+    Id.assign(id, 'tb', 'toolbar')
+
+    function proxy(c) {
+      var proto = Object.getPrototypeOf(c)
+      Object.getOwnPropertyNames(proto).forEach(method => {
+        if (method === 'getView' || method === 'constructor') return
+
+        c[method] = function(e) {
+          if (id.tb.isRecording) App.update(id.tb.recordEvent(this, e), { doPatch: false })
+          else proto[method].call(this, e)
+        }
+      })
+    }
+
+    return proxy
+  })()
+}
+
+class List {
+  constructor({ id, tag = 'div', proxy, components = [] }) {
+    this.type = 'List' // force
+    this.tag = tag
+    this.proxy = proxy
+    this.components = []
+    components.forEach(c_state => this.add(c_state))
+    this[view] = this.getView()
+    /*
+    this[Symbol.iterator] = function() {
+      var self = this
+      var i = 0
+      var branches = []
+      return {
+        next() {
+          if (i < self.components.length) {
+            var c = self.components[i++]
+            if (c instanceof List) {
+              branches.push(c)
+              return this.next()
+            }
+            else return { value: c }
+          }
+          else if (branches.length) {
+            self = branches.shift()
+            i = 0
+            return this.next()
+          }
+          else return { done: true }
+        }
+      }
+    }
+    */
+  }
+
+  add(c_state) {
+    var new_c = new Type[c_state.type](c_state)
+    if (this.proxy) ProxyName[this.proxy](new_c)
+    new_c[view] = new_c.getView()
+    new_c[parent] = this
+    this.components.push(new_c)
+    if (c_state.id) Id.add(new_c.id = c_state.id, new_c)
+    return new_c
+  }
+
+  getTrieKeys(this_c, keys = []) {
+    for (var i = 0; i < this.components.length; i++) {
+      var c = this.components[i]
+
+      if (c === this_c) {
+        keys.push(i)
+        return keys
+      }
+
+      if (c instanceof List) {
+        if (c.getTrieKeys(this_c, keys)) {
+          keys.unshift(i)
+          return keys
+        }
+      }
+    }
+  }
+
+  getView() {
+    return h(this.tag, this.components.map(c => c[view]))
+  }
+}
+
+const Type = { List, AppToolbar, AppMacro, AppCounter }
 /*
 __UPPER APP-LEVEL_______________________________________________________________
 
@@ -291,20 +304,22 @@ this level is for:
 
 */
 class LocalStorageApplication extends List {
-  constructor({ id, tag, components }) {
+  constructor({ id, superState }) {
     var savedState = JSON.parse(localStorage.getItem(id))
 
     if (savedState) super(savedState)
-    else super({ tag, components })
+    else super(superState)
 
     Object.defineProperty(this, 'id', { value: id, enumerable: false })
   }
 
-  update(component, doPatch = true, doSave = true) {
+  update(c, doPatch = true, doSave = true) {
     // recompile views
-    if (Array.isArray(component)) {
-      for (var c of component) super.update(c)
-    } else super.update(component)
+    var recomp = (c) => {
+      do c[view] = c.getView()
+      while ((c = c[parent]) && c !== this)
+    }
+    Array.isArray(c) ? c.forEach(c => recomp(c)) : recomp(c)
 
     if (doPatch) {
       // patch DOM
@@ -356,9 +371,11 @@ ________________________________________________________________________________
 */
 var App = new Demo(document.getElementById('CounterDemo'), document.getElementById('_state'), {
   id: 'CounterDemo',
-  components: [
-    { type: 'AppToolbar', id: 'toolbar' },
-    { type: 'List', id: 'list' }
-  ]
+  superState: {
+    components: [
+      { type: 'AppToolbar', id: 'toolbar' },
+      { type: 'List', id: 'list', proxy: 'toolbar_isRecording' }
+    ]
+  }
 })
 
